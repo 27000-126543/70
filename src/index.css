@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
+:root {
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: dark;
+  color: #e2e8f0;
+  background-color: #050714;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: #050714;
+}
+
+/* Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 21, 48, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.6);
+}
+
+/* Glassmorphism Card */
+@layer components {
+  .glass-card {
+    @apply bg-space-800/60 backdrop-blur-xl border border-white/10 rounded-2xl;
+  }
+  .glass-card-hover {
+    @apply hover:border-plasma-500/40 hover:bg-space-800/80 transition-all duration-300;
+  }
+  .glow-border {
+    box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.3), 0 0 20px rgba(0, 212, 255, 0.1);
+  }
+  .accretion-glow {
+    box-shadow: 0 0 0 1px rgba(255, 170, 0, 0.3), 0 0 20px rgba(255, 170, 0, 0.1);
+  }
+  .alert-glow {
+    box-shadow: 0 0 0 1px rgba(255, 59, 92, 0.4), 0 0 20px rgba(255, 59, 92, 0.15);
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .btn-primary {
+    @apply px-5 py-2.5 bg-plasma-500/20 border border-plasma-500/50 text-plasma-100 rounded-xl
+           hover:bg-plasma-500/30 hover:border-plasma-400 hover:shadow-[0_0_20px_rgba(0,212,255,0.3)]
+           transition-all duration-300 font-medium tracking-wide;
+  }
+  .btn-accretion {
+    @apply px-5 py-2.5 bg-accretion-500/20 border border-accretion-500/50 text-accretion-100 rounded-xl
+           hover:bg-accretion-500/30 hover:border-accretion-400 hover:shadow-[0_0_20px_rgba(255,170,0,0.3)]
+           transition-all duration-300 font-medium tracking-wide;
+  }
+  .btn-danger {
+    @apply px-5 py-2.5 bg-alert-500/20 border border-alert-500/50 text-alert-100 rounded-xl
+           hover:bg-alert-500/30 hover:border-alert-400 transition-all duration-300 font-medium tracking-wide;
+  }
+  .btn-ghost {
+    @apply px-5 py-2.5 bg-white/5 border border-white/10 text-slate-300 rounded-xl
+           hover:bg-white/10 hover:border-white/20 transition-all duration-300;
+  }
+  .badge-status {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .input-field {
+    @apply w-full bg-space-900/60 border border-white/10 rounded-xl px-4 py-2.5 text-slate-200
+           placeholder:text-slate-500 focus:border-plasma-500/60 focus:ring-2 focus:ring-plasma-500/20
+           outline-none transition-all duration-200 font-mono text-sm;
+  }
+  .section-title {
+    @apply font-orbitron text-lg font-semibold text-slate-100 tracking-wide mb-4 flex items-center gap-2;
+  }
+  .data-label {
+    @apply text-xs text-slate-400 uppercase tracking-wider;
+  }
+  .data-value {
+    @apply font-mono text-slate-100;
+  }
+  .divider-glow {
+    @apply h-px bg-gradient-to-r from-transparent via-plasma-500/30 to-transparent;
+  }
+}
+
+/* Stars background */
+.stars-bg {
+  background:
+    radial-gradient(1px 1px at 20px 30px, #eee, transparent),
+    radial-gradient(1px 1px at 40px 70px, rgba(255,255,255,0.8), transparent),
+    radial-gradient(1px 1px at 50px 160px, rgba(255,255,255,0.6), transparent),
+    radial-gradient(1px 1px at 90px 40px, #fff, transparent),
+    radial-gradient(1px 1px at 130px 80px, rgba(255,255,255,0.7), transparent),
+    radial-gradient(2px 2px at 160px 120px, #ddd, transparent),
+    #050714;
+  background-repeat: repeat;
+  background-size: 200px 200px;
+}
+
+/* Custom range slider */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-track {
+  height: 4px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #00d4ff;
+  margin-top: -6px;
+  box-shadow: 0 0 10px rgba(0,212,255,0.6);
+  transition: all 0.2s;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 15px rgba(0,212,255,0.8);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #00d4ff;
+  border: none;
+  box-shadow: 0 0 10px rgba(0,212,255,0.6);
+}
