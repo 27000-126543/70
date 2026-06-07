@@ -89,10 +89,13 @@ export default function NewSimulation() {
   } = useParamStore();
   const { createSimulation, recommendations, series } = useSimulationStore();
   const [submitted, setSubmitted] = useState(false);
+  const [createdSimId, setCreatedSimId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!taskName.trim()) return;
-    const sim = createSimulation({
+    setErrorMsg(null);
+    const result = await createSimulation({
       name: taskName,
       params: blackHole,
       magneticField,
@@ -100,8 +103,13 @@ export default function NewSimulation() {
       description: taskDescription,
       parameterSeriesId: selectedSeriesId || undefined,
     });
+    if (!result.success || !result.simulation) {
+      setErrorMsg(result.error || '创建模拟任务失败');
+      return;
+    }
+    setCreatedSimId(result.simulation.id);
     setSubmitted(true);
-    setTimeout(() => navigate(`/simulations/${sim.id}`), 1200);
+    setTimeout(() => navigate(`/simulations/${result.simulation!.id}`), 1200);
   };
 
   if (submitted) {
@@ -127,6 +135,15 @@ export default function NewSimulation() {
         <div>
           <h1 className="font-orbitron text-2xl font-bold text-slate-100 tracking-wide">新建GRMHD模拟任务</h1>
           <p className="text-sm text-slate-400 mt-1">配置黑洞参数、磁场构型与初始条件，启动数值模拟</p>
+          {errorMsg && (
+            <div className="mt-3 p-3 rounded-xl bg-alert-500/15 border border-alert-500/40 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-alert-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-alert-300">创建模拟失败</p>
+                <p className="text-xs text-alert-400 mt-0.5">{errorMsg}</p>
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <button onClick={reset} className="btn-ghost inline-flex items-center gap-2 text-sm">

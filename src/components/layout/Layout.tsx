@@ -161,12 +161,12 @@ function TopBar() {
 }
 
 export default function Layout() {
-  const { initializeMockData, tickSimulation, simulations } = useSimulationStore();
+  const { fetchInitialData, connectWebSocket, disconnectWebSocket, simulations, wsConnected } = useSimulationStore();
 
   useEffect(() => {
-    if (simulations.length === 0) initializeMockData();
-    const iv = setInterval(tickSimulation, 1500);
-    return () => clearInterval(iv);
+    fetchInitialData();
+    connectWebSocket();
+    return () => disconnectWebSocket();
   }, []);
 
   return (

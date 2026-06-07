@@ -137,6 +137,18 @@ export interface DailyStatistics {
   divergenceCount: number;
 }
 
+export interface ObservationProposalLog {
+  id: string;
+  simulationId: string;
+  simulationName: string;
+  pushedBy: string;
+  pushedAt: number;
+  targetSource: string;
+  observingBand: string;
+  exposureTime: number;
+  status: 'submitted' | 'accepted' | 'rejected';
+}
+
 export interface SimulationTask {
   id: string;
   name: string;
@@ -161,6 +173,23 @@ export interface SimulationTask {
   magneticField3D?: MagneticField3D;
   createdBy: string;
   description?: string;
+  observationProposal?: ObservationProposalLog;
+}
+
+export type WSMessageType =
+  | 'simulation:status'
+  | 'simulation:progress'
+  | 'simulation:monitoring'
+  | 'simulation:warning'
+  | 'simulation:approval'
+  | 'simulation:created'
+  | 'series:updated'
+  | 'stats:updated';
+
+export interface WSMessage {
+  type: WSMessageType;
+  timestamp: number;
+  payload: any;
 }
 
 export const STATUS_LABELS: Record<SimulationStatus, string> = {

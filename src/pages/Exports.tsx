@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 export default function Exports() {
-  const { simulations } = useSimulationStore();
+  const { simulations, generateReportPDF } = useSimulationStore();
   const [selectedSim, setSelectedSim] = useState<string | null>(null);
   const [spinRange, setSpinRange] = useState<[number, number]>([0, 1]);
   const [bRange, setBRange] = useState<[number, number]>([0, 100]);
@@ -24,6 +24,7 @@ export default function Exports() {
   const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'fits'>('csv');
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const completedSims = simulations.filter((s) => s.status === 'completed');
   const selected = completedSims.find((s) => s.id === selectedSim);
@@ -32,14 +33,20 @@ export default function Exports() {
     (s) => s.params.spin >= spinRange[0] && s.params.spin <= spinRange[1] && s.magneticField.strength >= bRange[0] && s.magneticField.strength <= bRange[1]
   );
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!selected) return;
     setExporting(true);
-    setTimeout(() => {
+    setErrorMsg(null);
+    try {
+      await generateReportPDF(selected.id);
       setExporting(false);
       setExported(true);
       setTimeout(() => setExported(false), 3000);
-    }, 1500);
+    } catch (e) {
+      setExporting(false);
+      setErrorMsg('报告生成失败：' + (e as Error).message);
+      setTimeout(() => setErrorMsg(null), 5000);
+    }
   };
 
   const handleExportData = () => {
@@ -107,6 +114,9 @@ export default function Exports() {
               )}
               {exporting ? '生成中...' : exported ? '已生成！' : '生成 PDF 报告'}
             </button>
+            {errorMsg && (
+              <p className="text-xs text-alert-400 mt-2 text-center">{errorMsg}</p>
+            )}
           </div>
 
           {selected && (

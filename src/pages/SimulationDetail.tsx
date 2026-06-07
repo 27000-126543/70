@@ -71,7 +71,7 @@ export default function SimulationDetail() {
   }));
 
   const handleWarningReview = (warningId: string, approved: boolean) => {
-    reviewWarning(sim.id, warningId, '当前用户', reviewComment || (approved ? '已确认，参数合理' : '需要进一步调查'));
+    reviewWarning(sim.id, warningId, '当前用户', reviewComment || (approved ? '已确认，参数合理' : '需要进一步调查'), approved);
     if (approved) {
       addAdjustmentLog(sim.id, {
         id: generateId(),

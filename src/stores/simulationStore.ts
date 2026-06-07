@@ -14,17 +14,30 @@ import type {
   DailyStatistics,
   MonitoringData,
 } from '../types';
+
+type WSMessageType =
+  | 'simulation:status'
+  | 'simulation:progress'
+  | 'simulation:monitoring'
+  | 'simulation:warning'
+  | 'simulation:approval'
+  | 'simulation:created'
+  | 'series:updated'
+  | 'stats:updated';
+interface WSMessage {
+  type: WSMessageType;
+  timestamp: number;
+  payload: any;
+}
 import {
   generateMockSimulations,
   generateParameterSeries,
   generateRecommendations,
   generateDailyStatistics,
-  generateMonitoringData,
-  generateWarningEvent,
-  generateId,
-  generateRadiationData,
-  generateMagneticField3D,
 } from '../data/mockEngine';
+
+const API_BASE = 'http://localhost:3001/api';
+const WS_URL = 'ws://localhost:3001/ws';
 
 interface SimulationState {
   simulations: SimulationTask[];
@@ -33,7 +46,8 @@ interface SimulationState {
   dailyStats: DailyStatistics[];
   currentSimulation: SimulationTask | null;
   statusFilter: SimulationStatus | 'all';
-  isSimulating: boolean;
+  wsConnected: boolean;
+  wsError: string | null;
 
   setStatusFilter: (f: SimulationStatus | 'all') => void;
   setCurrentSimulation: (id: string | null) => void;
@@ -44,19 +58,17 @@ interface SimulationState {
     initialConditions: InitialConditions;
     description?: string;
     parameterSeriesId?: string;
-  }) => SimulationTask;
-  updateSimulationStatus: (id: string, status: SimulationStatus) => void;
-  updateSimulationProgress: (id: string, progress: number) => void;
-  addMonitoringData: (id: string, data: MonitoringData) => void;
-  addWarning: (id: string, warning: WarningEvent) => void;
-  reviewWarning: (simId: string, warningId: string, reviewedBy: string, comment: string) => void;
+  }) => Promise<{ success: boolean; simulation?: SimulationTask; error?: string }>;
+  updateSimulationStatus: (id: string, status: SimulationStatus) => Promise<void>;
+  reviewWarning: (simId: string, warningId: string, reviewedBy: string, comment: string, approved: boolean) => Promise<void>;
   addAdjustmentLog: (id: string, log: AdjustmentLog) => void;
-  addApproval: (id: string, record: ApprovalRecord) => void;
-  setApprovalStatus: (id: string, status: ApprovalStatus) => void;
-  pauseSeries: (seriesId: string) => void;
-  resumeSeries: (seriesId: string) => void;
+  addApproval: (id: string, record: ApprovalRecord) => Promise<void>;
+  setApprovalStatus: (id: string, status: ApprovalStatus) => Promise<void>;
+  pushToObservationProposal: (id: string, pushedBy?: string) => Promise<{ success: boolean; error?: string }>;
+  pauseSeries: (seriesId: string) => Promise<void>;
+  resumeSeries: (seriesId: string) => Promise<void>;
   getSimulationsByStatus: (status: SimulationStatus | 'all') => SimulationTask[];
-  getWarnings: (onlyUnreviewed?: boolean) => WarningEvent[];
+  getWarnings: (onlyUnreviewed?: boolean) => (WarningEvent & { simName?: string })[];
   getPendingApprovals: () => { simulation: SimulationTask }[];
   getStatistics: () => {
     total: number;
@@ -68,8 +80,157 @@ interface SimulationState {
     activeWarnings: number;
     pendingApprovals: number;
   };
-  initializeMockData: () => void;
-  tickSimulation: () => void;
+  fetchInitialData: () => Promise<void>;
+  connectWebSocket: () => void;
+  disconnectWebSocket: () => void;
+  generateReportPDF: (simId: string) => Promise<void>;
+}
+
+let ws: WebSocket | null = null;
+let wsReconnectTimer: NodeJS.Timeout | null = null;
+
+function createWSConnection(set: any, get: any) {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  try {
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      console.log('[WS] Connected to backend');
+      set({ wsConnected: true, wsError: null });
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg: WSMessage = JSON.parse(event.data);
+        handleWSMessage(msg, set, get);
+      } catch (e) {
+        console.error('[WS] Parse error:', e);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('[WS] Error:', err);
+      set({ wsConnected: false, wsError: 'WebSocket connection error' });
+    };
+
+    ws.onclose = () => {
+      console.log('[WS] Disconnected, will reconnect in 3s');
+      set({ wsConnected: false });
+      if (!wsReconnectTimer) {
+        wsReconnectTimer = setTimeout(() => createWSConnection(set, get), 3000);
+      }
+    };
+  } catch (e) {
+    console.error('[WS] Failed to create connection:', e);
+    set({ wsConnected: false, wsError: String(e) });
+    if (!wsReconnectTimer) {
+      wsReconnectTimer = setTimeout(() => createWSConnection(set, get), 3000);
+    }
+  }
+}
+
+function handleWSMessage(msg: WSMessage, set: any, get: any) {
+  const state = get();
+
+  switch (msg.type) {
+    case 'simulation:created': {
+      const newSim = msg.payload.simulation as SimulationTask;
+      set({ simulations: [newSim, ...state.simulations] });
+      break;
+    }
+    case 'simulation:status': {
+      const { simulationId, status, simulation } = msg.payload;
+      set({
+        simulations: state.simulations.map((s: SimulationTask) =>
+          s.id === simulationId
+            ? simulation || { ...s, status }
+            : s
+        ),
+        currentSimulation:
+          state.currentSimulation && state.currentSimulation.id === simulationId
+            ? simulation || { ...state.currentSimulation, status }
+            : state.currentSimulation,
+      });
+      break;
+    }
+    case 'simulation:progress': {
+      const { simulationId, progress, currentStep, elapsedTime, simulation } = msg.payload;
+      set({
+        simulations: state.simulations.map((s: SimulationTask) =>
+          s.id === simulationId
+            ? simulation || { ...s, progress, currentStep, elapsedTime }
+            : s
+        ),
+        currentSimulation:
+          state.currentSimulation && state.currentSimulation.id === simulationId
+            ? simulation || { ...state.currentSimulation, progress, currentStep, elapsedTime }
+            : state.currentSimulation,
+      });
+      break;
+    }
+    case 'simulation:monitoring': {
+      const { simulationId, data } = msg.payload as { simulationId: string; data: MonitoringData };
+      set({
+        simulations: state.simulations.map((s: SimulationTask) =>
+          s.id === simulationId
+            ? { ...s, monitoringHistory: [...s.monitoringHistory.slice(-200), data] }
+            : s
+        ),
+        currentSimulation:
+          state.currentSimulation && state.currentSimulation.id === simulationId
+            ? {
+                ...state.currentSimulation,
+                monitoringHistory: [...state.currentSimulation.monitoringHistory.slice(-200), data],
+              }
+            : state.currentSimulation,
+      });
+      break;
+    }
+    case 'simulation:warning': {
+      const { simulationId, warning } = msg.payload;
+      set({
+        simulations: state.simulations.map((s: SimulationTask) =>
+          s.id === simulationId
+            ? { ...s, warnings: [warning, ...s.warnings] }
+            : s
+        ),
+        currentSimulation:
+          state.currentSimulation && state.currentSimulation.id === simulationId
+            ? { ...state.currentSimulation, warnings: [warning, ...state.currentSimulation.warnings] }
+            : state.currentSimulation,
+      });
+      break;
+    }
+    case 'simulation:approval': {
+      const { simulationId, simulation } = msg.payload;
+      if (simulation) {
+        set({
+          simulations: state.simulations.map((s: SimulationTask) =>
+            s.id === simulationId ? simulation : s
+          ),
+          currentSimulation:
+            state.currentSimulation && state.currentSimulation.id === simulationId
+              ? simulation
+              : state.currentSimulation,
+        });
+      }
+      break;
+    }
+    case 'series:updated': {
+      set({ series: msg.payload.series });
+      break;
+    }
+    case 'stats:updated': {
+      break;
+    }
+  }
 }
 
 export const useSimulationStore = create<SimulationState>((set, get) => ({
@@ -79,170 +240,190 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   dailyStats: [],
   currentSimulation: null,
   statusFilter: 'all',
-  isSimulating: false,
+  wsConnected: false,
+  wsError: null,
 
   setStatusFilter: (f) => set({ statusFilter: f }),
   setCurrentSimulation: (id) =>
     set({ currentSimulation: id ? get().simulations.find((s) => s.id === id) || null : null }),
 
-  createSimulation: (data) => {
-    const task: SimulationTask = {
-      id: generateId(),
-      name: data.name,
-      params: data.params,
-      magneticField: data.magneticField,
-      initialConditions: data.initialConditions,
-      status: 'pending_validation',
-      progress: 0,
-      currentStep: 0,
-      totalSteps: 5000,
-      startTime: Date.now(),
-      elapsedTime: 0,
-      parameterSeriesId: data.parameterSeriesId,
-      warnings: [],
-      adjustmentLog: [],
-      divergenceCount: 0,
-      approvalStatus: 'pending',
-      approvals: [],
-      monitoringHistory: [],
-      createdBy: '当前用户',
-      description: data.description,
-    };
-    set((s) => ({ simulations: [task, ...s.simulations] }));
-    setTimeout(() => get().updateSimulationStatus(task.id, 'mesh_generation'), 800);
-    setTimeout(() => get().updateSimulationStatus(task.id, 'initializing'), 2000);
-    setTimeout(() => get().updateSimulationStatus(task.id, 'evolving'), 3500);
-    return task;
+  fetchInitialData: async () => {
+    try {
+      const [simsRes, statsRes] = await Promise.all([
+        fetch(`${API_BASE}/simulations`),
+        fetch(`${API_BASE}/simulations/stats`),
+      ]);
+      if (simsRes.ok) {
+        const simsJson = await simsRes.json();
+        set({ simulations: simsJson.data });
+      }
+      if (statsRes.ok) {
+        const statsJson = await statsRes.json();
+        set({
+          series: statsJson.data.series || generateParameterSeries(),
+          recommendations: statsJson.data.recommendations || generateRecommendations(4),
+          dailyStats: statsJson.data.dailyStats || generateDailyStatistics(14),
+        });
+      }
+      try {
+        const seriesRes = await fetch(`${API_BASE}/simulations/series`);
+        if (seriesRes.ok) {
+          const s = await seriesRes.json();
+          set({ series: s.data });
+        }
+        const recRes = await fetch(`${API_BASE}/simulations/recommendations`);
+        if (recRes.ok) {
+          const r = await recRes.json();
+          set({ recommendations: r.data });
+        }
+      } catch {}
+    } catch (e) {
+      console.error('[Store] Failed to fetch initial data, using fallback:', e);
+      set({
+        simulations: generateMockSimulations(12),
+        series: generateParameterSeries(),
+        recommendations: generateRecommendations(4),
+        dailyStats: generateDailyStatistics(14),
+      });
+    }
   },
 
-  updateSimulationStatus: (id, status) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === id
-          ? {
-              ...sim,
-              status,
-              endTime: status === 'completed' || status === 'error_fallback' ? Date.now() : sim.endTime,
-              radiationData:
-                status === 'completed' && !sim.radiationData ? generateRadiationData(id) : sim.radiationData,
-              magneticField3D:
-                status === 'completed' && !sim.magneticField3D ? generateMagneticField3D() : sim.magneticField3D,
-              approvalStatus: status === 'completed' ? 'pending' : sim.approvalStatus,
-            }
-          : sim
+  connectWebSocket: () => {
+    createWSConnection(set, get);
+  },
+
+  disconnectWebSocket: () => {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    if (wsReconnectTimer) {
+      clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = null;
+    }
+  },
+
+  createSimulation: async (data) => {
+    try {
+      const res = await fetch(`${API_BASE}/simulations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data, createdBy: '当前用户' }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        return { success: false, error: json.error };
+      }
+      return { success: true, simulation: json.data };
+    } catch (e) {
+      console.error('[Store] Create simulation error:', e);
+      return { success: false, error: 'Failed to create simulation: ' + (e as Error).message };
+    }
+  },
+
+  updateSimulationStatus: async (id, status) => {
+    try {
+      await fetch(`${API_BASE}/simulations/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+    } catch (e) {
+      console.error('[Store] Update status error:', e);
+    }
+  },
+
+  reviewWarning: async (simId, warningId, reviewedBy, comment, approved) => {
+    try {
+      await fetch(`${API_BASE}/simulations/${simId}/warnings/${warningId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewedBy, comment, approved }),
+      });
+      const state = get();
+      set({
+        simulations: state.simulations.map((s) =>
+          s.id === simId
+            ? {
+                ...s,
+                warnings: s.warnings.map((w) =>
+                  w.id === warningId ? { ...w, reviewed: true, reviewedBy, reviewComment: comment } : w
+                ),
+              }
+            : s
+        ),
+      });
+    } catch (e) {
+      console.error('[Store] Review warning error:', e);
+    }
+  },
+
+  addAdjustmentLog: (id, log) => {
+    const state = get();
+    set({
+      simulations: state.simulations.map((s) =>
+        s.id === id ? { ...s, adjustmentLog: [log, ...s.adjustmentLog] } : s
       ),
-      currentSimulation:
-        s.currentSimulation && s.currentSimulation.id === id
-          ? {
-              ...s.currentSimulation,
-              status,
-              endTime: status === 'completed' || status === 'error_fallback' ? Date.now() : s.currentSimulation.endTime,
-              radiationData:
-                status === 'completed' && !s.currentSimulation.radiationData
-                  ? generateRadiationData(id)
-                  : s.currentSimulation.radiationData,
-              magneticField3D:
-                status === 'completed' && !s.currentSimulation.magneticField3D
-                  ? generateMagneticField3D()
-                  : s.currentSimulation.magneticField3D,
-            }
-          : s.currentSimulation,
-    })),
+    });
+  },
 
-  updateSimulationProgress: (id, progress) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === id
-          ? {
-              ...sim,
-              progress: Math.min(100, progress),
-              currentStep: Math.floor((progress / 100) * sim.totalSteps),
-              elapsedTime: Math.floor((Date.now() - sim.startTime) / 1000),
-            }
-          : sim
-      ),
-      currentSimulation:
-        s.currentSimulation && s.currentSimulation.id === id
-          ? {
-              ...s.currentSimulation,
-              progress: Math.min(100, progress),
-              currentStep: Math.floor((progress / 100) * s.currentSimulation.totalSteps),
-              elapsedTime: Math.floor((Date.now() - s.currentSimulation.startTime) / 1000),
-            }
-          : s.currentSimulation,
-    })),
+  addApproval: async (id, record) => {
+    try {
+      await fetch(`${API_BASE}/simulations/${id}/approvals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+    } catch (e) {
+      console.error('[Store] Add approval error:', e);
+    }
+  },
 
-  addMonitoringData: (id, data) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === id
-          ? { ...sim, monitoringHistory: [...sim.monitoringHistory.slice(-200), data] }
-          : sim
-      ),
-      currentSimulation:
-        s.currentSimulation && s.currentSimulation.id === id
-          ? {
-              ...s.currentSimulation,
-              monitoringHistory: [...s.currentSimulation.monitoringHistory.slice(-200), data],
-            }
-          : s.currentSimulation,
-    })),
+  setApprovalStatus: async (id, status) => {
+    try {
+      await fetch(`${API_BASE}/simulations/${id}/approval-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+    } catch (e) {
+      console.error('[Store] Set approval status error:', e);
+    }
+  },
 
-  addWarning: (id, warning) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === id ? { ...sim, warnings: [warning, ...sim.warnings] } : sim
-      ),
-      currentSimulation:
-        s.currentSimulation && s.currentSimulation.id === id
-          ? { ...s.currentSimulation, warnings: [warning, ...s.currentSimulation.warnings] }
-          : s.currentSimulation,
-    })),
+  pushToObservationProposal: async (id, pushedBy) => {
+    try {
+      const res = await fetch(`${API_BASE}/observations/propose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ simulationId: id, pushedBy }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        return { success: false, error: json.error };
+      }
+      return { success: true };
+    } catch (e) {
+      console.error('[Store] Push proposal error:', e);
+      return { success: false, error: (e as Error).message };
+    }
+  },
 
-  reviewWarning: (simId, warningId, reviewedBy, comment) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === simId
-          ? {
-              ...sim,
-              warnings: sim.warnings.map((w) =>
-                w.id === warningId ? { ...w, reviewed: true, reviewedBy, reviewComment: comment } : w
-              ),
-            }
-          : sim
-      ),
-    })),
+  pauseSeries: async (seriesId) => {
+    try {
+      await fetch(`${API_BASE}/simulations/series/${seriesId}/pause`, { method: 'POST' });
+    } catch (e) {
+      console.error('[Store] Pause series error:', e);
+    }
+  },
 
-  addAdjustmentLog: (id, log) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === id ? { ...sim, adjustmentLog: [log, ...sim.adjustmentLog] } : sim
-      ),
-    })),
-
-  addApproval: (id, record) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) =>
-        sim.id === id ? { ...sim, approvals: [record, ...sim.approvals] } : sim
-      ),
-    })),
-
-  setApprovalStatus: (id, status) =>
-    set((s) => ({
-      simulations: s.simulations.map((sim) => (sim.id === id ? { ...sim, approvalStatus: status } : sim)),
-    })),
-
-  pauseSeries: (seriesId) =>
-    set((s) => ({
-      series: s.series.map((ser) => (ser.id === seriesId ? { ...ser, status: 'paused' } : ser)),
-    })),
-
-  resumeSeries: (seriesId) =>
-    set((s) => ({
-      series: s.series.map((ser) =>
-        ser.id === seriesId ? { ...ser, status: 'active', consecutiveDivergences: 0 } : ser
-      ),
-    })),
+  resumeSeries: async (seriesId) => {
+    try {
+      await fetch(`${API_BASE}/simulations/series/${seriesId}/resume`, { method: 'POST' });
+    } catch (e) {
+      console.error('[Store] Resume series error:', e);
+    }
+  },
 
   getSimulationsByStatus: (status) => {
     const { simulations } = get();
@@ -266,7 +447,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   },
 
   getStatistics: () => {
-    const { simulations, dailyStats } = get();
+    const { simulations } = get();
     const total = simulations.length;
     const byStatus = {} as Record<SimulationStatus, number>;
     (['pending_validation', 'mesh_generation', 'initializing', 'evolving', 'radiation_synthesis', 'completed', 'error_fallback', 'paused'] as SimulationStatus[]).forEach(
@@ -288,35 +469,24 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     return { total, byStatus, running, completed, completionRate, avgDuration, activeWarnings, pendingApprovals: pendingApprovalCount };
   },
 
-  initializeMockData: () => {
-    const sims = generateMockSimulations(12);
-    set({
-      simulations: sims,
-      series: generateParameterSeries(),
-      recommendations: generateRecommendations(4),
-      dailyStats: generateDailyStatistics(14),
-      isSimulating: true,
-    });
-  },
-
-  tickSimulation: () => {
-    const { simulations } = get();
-    simulations.forEach((sim) => {
-      if (sim.status === 'evolving' && sim.progress < 100) {
-        const newProgress = Math.min(99, sim.progress + Math.random() * 0.8);
-        get().updateSimulationProgress(sim.id, newProgress);
-        const step = sim.currentStep + 1;
-        get().addMonitoringData(sim.id, generateMonitoringData(sim.id, step));
-        if (Math.random() < 0.02) {
-          get().addWarning(sim.id, generateWarningEvent(sim.id));
-        }
-        if (newProgress >= 99) {
-          setTimeout(() => {
-            get().updateSimulationStatus(sim.id, 'radiation_synthesis');
-            setTimeout(() => get().updateSimulationStatus(sim.id, 'completed'), 2500);
-          }, 1500);
-        }
-      }
-    });
+  generateReportPDF: async (simId) => {
+    try {
+      const res = await fetch(`${API_BASE}/exports/report/${simId}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Report generation failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const disp = res.headers.get('Content-Disposition');
+      const fname = disp?.match(/filename="(.+)"/)?.[1] || `GRMHD_Report_${simId}.pdf`;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('[Store] PDF generation error:', e);
+      throw e;
+    }
   },
 }));

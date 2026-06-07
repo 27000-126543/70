@@ -17,7 +17,7 @@ import {
 import { useState } from 'react';
 
 export default function Approvals() {
-  const { simulations, addApproval, setApprovalStatus } = useSimulationStore();
+  const { simulations, addApproval, setApprovalStatus, pushToObservationProposal } = useSimulationStore();
   const [filter, setFilter] = useState<'all' | 'pending' | 'postdoc' | 'professor' | 'approved' | 'rejected'>('all');
   const [activeSim, setActiveSim] = useState<string | null>(null);
   const [comment, setComment] = useState('');
@@ -78,9 +78,13 @@ export default function Approvals() {
     setComment('');
   };
 
-  const handlePush = (simId: string) => {
-    setApprovalStatus(simId, 'pushed_to_proposal');
-    setActiveSim(null);
+  const handlePush = async (simId: string) => {
+    const res = await pushToObservationProposal(simId, '教授');
+    if (res.success) {
+      setActiveSim(null);
+    } else {
+      alert('推送观测提案失败：' + (res.error || '未知错误'));
+    }
   };
 
   const filterOptions: { k: typeof filter; l: string; c: string }[] = [
